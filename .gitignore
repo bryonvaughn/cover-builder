@@ -19,3 +19,7 @@ node_modules/
 # Build artifacts
 dist/
 build/
+
+# uv
+**/.ruff_cache/
+**/.pytest_cache/

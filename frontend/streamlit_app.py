@@ -304,7 +304,7 @@ else:
 
                         st.divider()
 
-# ---- Optional: simple gallery (shows files you just generated) -------------
+# ---- Project image gallery (v1) -------------------------------------------
 
 st.header("Project image gallery (v1)")
 
@@ -312,6 +312,22 @@ project_id = st.session_state.get("project_id")
 if not project_id:
     st.info("Select a project to see its images.")
 else:
-    st.caption("For v1, this section just tells you where the static images live. Next we’ll add a real gallery endpoint.")
-    st.code(f"{API_BASE}/static/images/{project_id}/")
-    st.write("Open that URL to browse the folder listing (if your server allows it) or click images from the history above.")
+    r = api_get(f"/projects/{project_id}/images", timeout=30)
+    if r.status_code != 200:
+        st.error(f"Failed to load images ({r.status_code}): {r.text}")
+    else:
+        images = r.json()
+        if not images:
+            st.write("No images yet.")
+        else:
+            cols = st.columns(3)
+            for i, img in enumerate(images):
+                url = f"{API_BASE}{img['image_url']}"
+                created_at = safe_ts(img.get("created_at"))
+                direction = img.get("direction_index")
+                caption_parts = [created_at] if created_at else []
+                if direction is not None:
+                    caption_parts.append(f"Direction {direction + 1}")
+                caption = " - ".join(caption_parts) if caption_parts else None
+                with cols[i % len(cols)]:
+                    st.image(url, caption=caption, width=220)

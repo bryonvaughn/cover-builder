@@ -1,8 +1,6 @@
 from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-
 from app.settings import get_settings
 from app.routes.cover import router as cover_router
 from app.routes.projects import router as projects_router

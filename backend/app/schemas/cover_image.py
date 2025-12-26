@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
@@ -28,3 +29,17 @@ class CoverImageOut(BaseModel):
 
 class CoverImageGenerateResponse(BaseModel):
     images: list[CoverImageOut]
+
+
+class CoverImageListOut(BaseModel):
+    id: UUID
+    project_id: UUID
+    brief_run_id: Optional[UUID]
+    direction_index: Optional[int]
+
+    prompt: str
+    model: str
+    size: str
+
+    image_url: str
+    created_at: datetime

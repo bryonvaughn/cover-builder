@@ -1,6 +1,6 @@
 import logging
 from typing import Any, Optional
-
+import base64
 from openai import OpenAI
 
 from app.settings import get_settings
@@ -36,3 +36,21 @@ class OpenAIClient:
             output_text = output_text()
 
         return {"model": use_model, "output_text": output_text, "raw": resp}
+
+    def generate_images(self, *, prompt: str, n: int, model: str, size: str) -> list[bytes]:
+        """
+        Returns list of image bytes (PNG/JPEG/WEBP depending on model/output_format).
+        For GPT image models, the API returns base64 data which we decode. :contentReference[oaicite:1]{index=1}
+        """
+        img = self.client.images.generate(
+            model=model,
+            prompt=prompt,
+            n=n,
+            size=size,
+        )
+
+        out: list[bytes] = []
+        for item in img.data:
+            # GPT image models return b64_json
+            out.append(base64.b64decode(item.b64_json))
+        return out

@@ -30,6 +30,11 @@ def fetch_projects():
 def refresh_projects_cache():
     fetch_projects.clear()
 
+def safe_ts(s: str | None) -> str:
+    if not s:
+        return ""
+    return s.replace("T", " ").replace("Z", "")
+
 # ---- Sidebar: API Status ---------------------------------------------------
 
 with st.sidebar:
@@ -97,11 +102,9 @@ with col_b:
     else:
         labels = [f"{p['title']} — {p['author']} ({p['genre']})" for p in projects]
 
-        # Keep selection across reruns
         if "project_id" not in st.session_state:
             st.session_state.project_id = projects[0]["id"]
 
-        # Find index of currently selected project_id (if present)
         current_id = st.session_state.project_id
         try:
             current_idx = next(i for i, p in enumerate(projects) if p["id"] == current_id)
@@ -117,7 +120,7 @@ with col_b:
         )
         selected_project = projects[selected_idx]
         st.session_state.project_id = selected_project["id"]
-        st.session_state.selected_project = selected_project  # <-- for prefilling downstream forms
+        st.session_state.selected_project = selected_project
 
         st.markdown("### Selected Project")
         st.write(
@@ -179,16 +182,9 @@ else:
                 data = r.json()
                 st.caption(f"Model: {data.get('model')}")
                 st.success("Brief generated (and saved to history).")
-
-                for i, d in enumerate(data.get("directions", []), start=1):
-                    st.markdown(f"### {i}. {d.get('name','(untitled)')}")
-                    st.write(d.get("one_liner", ""))
-                    st.markdown("**Image prompt (background only)**")
-                    st.code(d.get("image_prompt", ""))
-
                 st.rerun()
 
-# ---- Brief History ---------------------------------------------------------
+# ---- Brief History + Generate Images --------------------------------------
 
 st.header("Brief history")
 
@@ -208,27 +204,91 @@ else:
             st.caption(f"{len(runs)} run(s)")
 
             for run in runs:
-                created_at = (run.get("created_at") or "").replace("T", " ").replace("Z", "")
+                run_id = run["id"]
+                created_at = safe_ts(run.get("created_at"))
                 run_title = f"{created_at} — {run.get('status')} — {run.get('model')}"
 
                 with st.expander(run_title, expanded=False):
                     if run.get("error_message"):
                         st.error(run["error_message"])
 
-                    st.subheader("Directions")
                     directions = run.get("response_json", {}).get("directions", [])
                     if not directions:
                         st.write("No directions stored in this run.")
-                    else:
-                        for i, d in enumerate(directions, start=1):
-                            st.markdown(f"**{i}. {d.get('name','(untitled)')}**")
-                            st.write(d.get("one_liner", ""))
-                            st.code(d.get("image_prompt", ""))
+                        continue
 
-                    with st.expander("Raw request/response JSON", expanded=False):
-                        st.json(
-                            {
-                                "request_json": run.get("request_json", {}),
-                                "response_json": run.get("response_json", {}),
-                            }
+                    st.subheader("Directions")
+
+                    # Per-run controls
+                    top_cols = st.columns([1, 1, 2])
+                    with top_cols[0]:
+                        n_images = st.selectbox(
+                            "Images per direction",
+                            [1, 2, 3, 4],
+                            index=1,
+                            key=f"n_{run_id}",
                         )
+                    with top_cols[1]:
+                        size = st.selectbox(
+                            "Size",
+                            ["1024x1536", "1024x1024", "1536x1024"],
+                            index=0,
+                            key=f"size_{run_id}",
+                        )
+                    with top_cols[2]:
+                        st.caption("Tip: 1024x1536 is a good portrait starting point for cover-ish backgrounds.")
+
+                    for i, d in enumerate(directions):
+                        st.markdown(f"### {i + 1}. {d.get('name','(untitled)')}")
+                        st.write(d.get("one_liner", ""))
+
+                        prompt = d.get("image_prompt", "").strip()
+                        if prompt:
+                            st.markdown("**Image prompt (background only)**")
+                            st.code(prompt)
+
+                        btn_cols = st.columns([1, 3])
+                        with btn_cols[0]:
+                            clicked = st.button(
+                                "Generate images",
+                                key=f"gen_{run_id}_{i}",
+                                disabled=not bool(prompt),
+                            )
+                        with btn_cols[1]:
+                            st.caption("Generates background art and saves it to this project.")
+
+                        if clicked:
+                            payload = {
+                                "project_id": project_id,
+                                "brief_run_id": run_id,
+                                "direction_index": i,
+                                "prompt": prompt,
+                                "n": n_images,
+                                "size": size,
+                            }
+                            resp = requests.post(f"{API_BASE}/cover/image", json=payload, timeout=300)
+                            if resp.status_code != 200:
+                                st.error(f"API error {resp.status_code}: {resp.text}")
+                            else:
+                                data = resp.json()
+                                imgs = data.get("images", [])
+                                if not imgs:
+                                    st.warning("No images returned.")
+                                else:
+                                    urls = [f"{API_BASE}{img['image_url']}" for img in imgs]
+                                    st.image(urls, width=220)
+                                    st.success("Saved. (Images are now in Postgres + local storage.)")
+
+                        st.divider()
+
+# ---- Optional: simple gallery (shows files you just generated) -------------
+
+st.header("Project image gallery (v1)")
+
+project_id = st.session_state.get("project_id")
+if not project_id:
+    st.info("Select a project to see its images.")
+else:
+    st.caption("For v1, this section just tells you where the static images live. Next we’ll add a real gallery endpoint.")
+    st.code(f"{API_BASE}/static/images/{project_id}/")
+    st.write("Open that URL to browse the folder listing (if your server allows it) or click images from the history above.")

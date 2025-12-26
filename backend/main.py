@@ -1,6 +1,5 @@
-def main():
-    print("Hello from cover-builder-backend!")
+from fastapi import FastAPI
+from app.routes.cover import router as cover_router
 
-
-if __name__ == "__main__":
-    main()
+app = FastAPI(title="Cover Builder API")
+app.include_router(cover_router)

@@ -9,49 +9,226 @@ API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = os.getenv("API_PORT", "8000")
 API_BASE = f"http://{API_HOST}:{API_PORT}"
 
-st.title("Cover Builder (v1)")
+st.set_page_config(page_title="Cover Builder", layout="wide")
+st.title("Cover Builder")
 
-st.subheader("Generate cover brief")
+# ---- Helpers ---------------------------------------------------------------
 
-title = st.text_input("Title", "Diving Deep")
-subtitle = st.text_input("Subtitle (optional)", "")
-author = st.text_input("Author", "Tani Hanes")
-genre = st.text_input("Genre", "Romance")
-subgenre = st.text_input("Subgenre (optional)", "Rock Star Romance")
-tone = st.text_input("Tone words (comma-separated)", "dark, moody, intimate, London nights")
-blurb = st.text_area("Blurb (optional)", "")
+def api_get(path: str, *, timeout: int = 30):
+    return requests.get(f"{API_BASE}{path}", timeout=timeout)
 
-if st.button("Generate cover directions"):
-    payload = {
-        "title": title,
-        "subtitle": subtitle or None,
-        "author": author,
-        "genre": genre,
-        "subgenre": subgenre or None,
-        "blurb": blurb or None,
-        "tone_words": [t.strip() for t in tone.split(",") if t.strip()],
-        "comps": [],
-        "constraints": [],
-    }
+def api_post(path: str, payload: dict, *, timeout: int = 30):
+    return requests.post(f"{API_BASE}{path}", json=payload, timeout=timeout)
 
-    r = requests.post(f"{API_BASE}/cover/brief", json=payload, timeout=60)
+@st.cache_data(ttl=5)
+def fetch_projects():
+    r = api_get("/projects")
     if r.status_code != 200:
-        st.error(f"API error {r.status_code}: {r.text}")
+        raise RuntimeError(f"GET /projects failed ({r.status_code}): {r.text}")
+    return r.json()
+
+def refresh_projects_cache():
+    fetch_projects.clear()
+
+# ---- Sidebar: API Status ---------------------------------------------------
+
+with st.sidebar:
+    st.subheader("API")
+    try:
+        r = api_get("/health", timeout=10)
+        if r.status_code == 200:
+            st.success(f"Connected: {API_BASE}")
+        else:
+            st.error(f"Health check failed ({r.status_code})")
+    except Exception as e:
+        st.error(f"Cannot reach API: {e}")
+
+# ---- Main: Projects --------------------------------------------------------
+
+st.header("Projects")
+
+col_a, col_b = st.columns([1, 2], gap="large")
+
+with col_a:
+    st.subheader("Create a new project")
+
+    with st.form("create_project_form", clear_on_submit=False):
+        title = st.text_input("Book Title", placeholder="Diving Deep")
+        author = st.text_input("Author", placeholder="Tani Hanes")
+        genre = st.text_input("Genre", placeholder="Romance")
+        subgenre = st.text_input("Subgenre (optional)", placeholder="Rock Star Romance")
+
+        submitted = st.form_submit_button("Create Project")
+
+    if submitted:
+        if not title.strip() or not author.strip() or not genre.strip():
+            st.error("Title, Author, and Genre are required.")
+        else:
+            payload = {
+                "title": title.strip(),
+                "author": author.strip(),
+                "genre": genre.strip(),
+                "subgenre": subgenre.strip() or None,
+            }
+            try:
+                r = api_post("/projects", payload, timeout=30)
+                if r.status_code != 200:
+                    st.error(f"Create failed ({r.status_code}): {r.text}")
+                else:
+                    st.success("Project created.")
+                    refresh_projects_cache()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Create failed: {e}")
+
+with col_b:
+    st.subheader("Select a project")
+
+    try:
+        projects = fetch_projects()
+    except Exception as e:
+        st.error(str(e))
+        projects = []
+
+    if not projects:
+        st.info("No projects yet. Create one on the left.")
+        st.session_state.pop("project_id", None)
+        st.session_state.pop("selected_project", None)
     else:
-        data = r.json()
-        st.caption(f"Model: {data['model']}")
-        for i, d in enumerate(data["directions"], start=1):
-            st.markdown(f"### {i}. {d['name']}")
-            st.write(d["one_liner"])
-            st.markdown("**Imagery**")
-            st.write(d["imagery"])
-            st.markdown("**Typography**")
-            st.write(d["typography"])
-            st.markdown("**Palette**")
-            st.write(d["color_palette"])
-            st.markdown("**Layout notes**")
-            st.write(d["layout_notes"])
-            st.markdown("**Avoid**")
-            st.write(d["avoid"])
-            st.markdown("**Image prompt (background only)**")
-            st.code(d["image_prompt"])
+        labels = [f"{p['title']} — {p['author']} ({p['genre']})" for p in projects]
+
+        # Keep selection across reruns
+        if "project_id" not in st.session_state:
+            st.session_state.project_id = projects[0]["id"]
+
+        # Find index of currently selected project_id (if present)
+        current_id = st.session_state.project_id
+        try:
+            current_idx = next(i for i, p in enumerate(projects) if p["id"] == current_id)
+        except StopIteration:
+            current_idx = 0
+            st.session_state.project_id = projects[0]["id"]
+
+        selected_idx = st.selectbox(
+            "Projects",
+            range(len(projects)),
+            index=current_idx,
+            format_func=lambda i: labels[i],
+        )
+        selected_project = projects[selected_idx]
+        st.session_state.project_id = selected_project["id"]
+        st.session_state.selected_project = selected_project  # <-- for prefilling downstream forms
+
+        st.markdown("### Selected Project")
+        st.write(
+            {
+                "id": selected_project["id"],
+                "title": selected_project["title"],
+                "author": selected_project["author"],
+                "genre": selected_project["genre"],
+                "subgenre": selected_project.get("subgenre"),
+                "created_at": selected_project.get("created_at"),
+            }
+        )
+
+        if st.button("Refresh projects list"):
+            refresh_projects_cache()
+            st.rerun()
+
+# ---- Generate Brief --------------------------------------------------------
+
+st.header("Generate brief")
+
+project_id = st.session_state.get("project_id")
+proj = st.session_state.get("selected_project", {})
+
+if not project_id:
+    st.info("Create or select a project first.")
+else:
+    brief_title = st.text_input("Title (for this brief)", proj.get("title", ""))
+    brief_author = st.text_input("Author (for this brief)", proj.get("author", ""))
+    brief_genre = st.text_input("Genre (for this brief)", proj.get("genre", ""))
+    brief_subgenre = st.text_input("Subgenre (optional)", proj.get("subgenre") or "")
+
+    tone = st.text_input("Tone words (comma-separated)", "dark, moody, intimate")
+    comps = st.text_input("Comparable titles (comma-separated)", "")
+    constraints = st.text_input("Constraints (comma-separated)", "thumbnail readable, genre-appropriate")
+    blurb = st.text_area("Blurb (optional)", "")
+
+    if st.button("Generate cover directions"):
+        payload = {
+            "project_id": project_id,
+            "title": brief_title.strip(),
+            "author": brief_author.strip(),
+            "genre": brief_genre.strip(),
+            "subgenre": brief_subgenre.strip() or None,
+            "blurb": blurb.strip() or None,
+            "tone_words": [t.strip() for t in tone.split(",") if t.strip()],
+            "comps": [c.strip() for c in comps.split(",") if c.strip()],
+            "constraints": [c.strip() for c in constraints.split(",") if c.strip()],
+        }
+
+        missing = [k for k in ("title", "author", "genre") if not payload[k]]
+        if missing:
+            st.error(f"Missing required fields: {', '.join(missing)}")
+        else:
+            r = requests.post(f"{API_BASE}/cover/brief", json=payload, timeout=180)
+            if r.status_code != 200:
+                st.error(f"API error {r.status_code}: {r.text}")
+            else:
+                data = r.json()
+                st.caption(f"Model: {data.get('model')}")
+                st.success("Brief generated (and saved to history).")
+
+                for i, d in enumerate(data.get("directions", []), start=1):
+                    st.markdown(f"### {i}. {d.get('name','(untitled)')}")
+                    st.write(d.get("one_liner", ""))
+                    st.markdown("**Image prompt (background only)**")
+                    st.code(d.get("image_prompt", ""))
+
+                st.rerun()
+
+# ---- Brief History ---------------------------------------------------------
+
+st.header("Brief history")
+
+project_id = st.session_state.get("project_id")
+
+if not project_id:
+    st.info("Select a project to view brief history.")
+else:
+    r = requests.get(f"{API_BASE}/projects/{project_id}/brief-runs", timeout=30)
+    if r.status_code != 200:
+        st.error(f"Failed to load brief runs ({r.status_code}): {r.text}")
+    else:
+        runs = r.json()
+        if not runs:
+            st.info("No brief runs yet. Generate a brief to start history.")
+        else:
+            st.caption(f"{len(runs)} run(s)")
+
+            for run in runs:
+                created_at = (run.get("created_at") or "").replace("T", " ").replace("Z", "")
+                run_title = f"{created_at} — {run.get('status')} — {run.get('model')}"
+
+                with st.expander(run_title, expanded=False):
+                    if run.get("error_message"):
+                        st.error(run["error_message"])
+
+                    st.subheader("Directions")
+                    directions = run.get("response_json", {}).get("directions", [])
+                    if not directions:
+                        st.write("No directions stored in this run.")
+                    else:
+                        for i, d in enumerate(directions, start=1):
+                            st.markdown(f"**{i}. {d.get('name','(untitled)')}**")
+                            st.write(d.get("one_liner", ""))
+                            st.code(d.get("image_prompt", ""))
+
+                    with st.expander("Raw request/response JSON", expanded=False):
+                        st.json(
+                            {
+                                "request_json": run.get("request_json", {}),
+                                "response_json": run.get("response_json", {}),
+                            }
+                        )

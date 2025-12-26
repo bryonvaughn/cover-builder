@@ -21,8 +21,11 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_text_model: str = "gpt-5.2"  # default, can override in .env
 
+    app_env: str = "dev"
+    use_real_openai: bool = False
+
     storage_dir: str = Field(default="storage")
-    image_model: str = Field(default="gpt-image-1")
+    image_model: str = Field(default="gpt-image-1.5")
     image_size: str = Field(default="1024x1536")  # portrait cover-ish
 
     model_config = SettingsConfigDict(

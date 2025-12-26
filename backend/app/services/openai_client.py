@@ -1,56 +1,83 @@
-import logging
-from typing import Any, Optional
 import base64
+from typing import Any
 from openai import OpenAI
-
 from app.settings import get_settings
-
-logger = logging.getLogger(__name__)
 
 
 class OpenAIClient:
+    """
+    - create_text(prompt) -> {"model": ..., "output_text": "..."}
+    - generate_images(...) -> list[bytes] (PNG bytes)
+    """
+
     def __init__(self) -> None:
-        settings = get_settings()
-        self._client = OpenAI(api_key=settings.openai_api_key)
-        self._text_model = settings.openai_text_model
+        self.settings = get_settings()
 
-    def create_text(self, *, prompt: str, model: Optional[str] = None) -> dict[str, Any]:
-        use_model = model or self._text_model
+        api_key = getattr(self.settings, "openai_api_key", None)
+        if not api_key:
+            raise RuntimeError("Missing OPENAI_API_KEY (openai_api_key) in settings")
 
-        resp = self._client.responses.create(
+        # Always create the SDK client
+        self.client = OpenAI(api_key=api_key)
+
+        # Belt-and-suspenders: if something weird happened, fail NOW (not later)
+        if self.client is None:
+            raise RuntimeError(
+                "OpenAI SDK client is None after initialization. "
+                "This suggests your OpenAI import or instantiation is being shadowed."
+            )
+
+        self.text_model = getattr(self.settings, "text_model", None) or "gpt-4.1-mini"
+        self.image_model = getattr(self.settings, "image_model", None) or "gpt-image-1.5"
+        self.image_size = getattr(self.settings, "image_size", None) or "1024x1536"
+
+    def create_text(self, *, prompt: str, model: str | None = None) -> dict[str, Any]:
+        if self.client is None:
+            raise RuntimeError("OpenAI client is not initialized (self.client is None)")
+
+        use_model = model or self.text_model
+        resp = self.client.responses.create(
             model=use_model,
             input=prompt,
         )
+        output_text = getattr(resp, "output_text", "") or ""
+        return {"model": use_model, "output_text": output_text}
 
-        usage = getattr(resp, "usage", None)
-        if usage:
-            logger.info(
-                "OpenAI usage model=%s input_tokens=%s output_tokens=%s",
-                use_model,
-                getattr(usage, "input_tokens", None),
-                getattr(usage, "output_tokens", None),
-            )
+    def generate_images(
+        self,
+        *,
+        prompt: str,
+        n: int = 1,
+        model: str | None = None,
+        size: str | None = None,
+    ) -> list[bytes]:
+        if self.client is None:
+            raise RuntimeError("OpenAI client is not initialized (self.client is None)")
 
-        output_text = getattr(resp, "output_text", None)
-        if callable(output_text):
-            output_text = output_text()
+        use_model = model or self.image_model
+        use_size = size or self.image_size
 
-        return {"model": use_model, "output_text": output_text, "raw": resp}
-
-    def generate_images(self, *, prompt: str, n: int, model: str, size: str) -> list[bytes]:
-        """
-        Returns list of image bytes (PNG/JPEG/WEBP depending on model/output_format).
-        For GPT image models, the API returns base64 data which we decode. :contentReference[oaicite:1]{index=1}
-        """
         img = self.client.images.generate(
-            model=model,
+            model=use_model,
             prompt=prompt,
+            size=use_size,
             n=n,
-            size=size,
         )
 
         out: list[bytes] = []
         for item in img.data:
-            # GPT image models return b64_json
-            out.append(base64.b64decode(item.b64_json))
+            b64 = getattr(item, "b64_json", None)
+            if b64:
+                out.append(base64.b64decode(b64))
+                continue
+
+            url = getattr(item, "url", None)
+            if url:
+                raise RuntimeError(
+                    "OpenAI returned image URLs instead of base64. "
+                    "Adjust the images.generate call to request base64 output for your SDK version."
+                )
+
+            raise RuntimeError("OpenAI returned an image item with no b64_json or url")
+
         return out

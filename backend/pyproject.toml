@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.17.2",
     "fastapi>=0.127.0",
     "openai>=2.14.0",
+    "pillow>=12.0.0",
     "psycopg[binary]>=3.3.2",
     "pydantic-settings>=2.12.0",
     "python-dotenv>=1.2.1",

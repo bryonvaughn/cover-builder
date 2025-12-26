@@ -14,15 +14,26 @@ st.title("Cover Builder")
 
 # ---- Helpers ---------------------------------------------------------------
 
+def api_headers() -> dict:
+    """
+    Sent on every request so the backend can decide whether to use real OpenAI
+    without requiring an API restart.
+    """
+    use_real = bool(st.session_state.get("use_real_openai", False))
+    return {
+        "X-Use-Real-OpenAI": "true" if use_real else "false"
+    }
+
 def api_get(path: str, *, timeout: int = 30):
-    return requests.get(f"{API_BASE}{path}", timeout=timeout)
+    return requests.get(f"{API_BASE}{path}", timeout=timeout, headers=api_headers())
 
 def api_post(path: str, payload: dict, *, timeout: int = 30):
-    return requests.post(f"{API_BASE}{path}", json=payload, timeout=timeout)
+    return requests.post(f"{API_BASE}{path}", json=payload, timeout=timeout, headers=api_headers())
 
 @st.cache_data(ttl=5)
-def fetch_projects():
-    r = api_get("/projects")
+def fetch_projects(use_real_openai_flag: bool):
+    # include flag in cache key so toggling doesn't reuse cached responses incorrectly
+    r = requests.get(f"{API_BASE}/projects", timeout=30, headers={"X-Use-Real-OpenAI": "true" if use_real_openai_flag else "false"})
     if r.status_code != 200:
         raise RuntimeError(f"GET /projects failed ({r.status_code}): {r.text}")
     return r.json()
@@ -35,10 +46,23 @@ def safe_ts(s: str | None) -> str:
         return ""
     return s.replace("T", " ").replace("Z", "")
 
-# ---- Sidebar: API Status ---------------------------------------------------
+# ---- Sidebar: API Status + Real AI Toggle ---------------------------------
 
 with st.sidebar:
     st.subheader("API")
+
+    # Real OpenAI toggle
+    if "use_real_openai" not in st.session_state:
+        st.session_state.use_real_openai = False
+
+    st.session_state.use_real_openai = st.toggle(
+        "Use real OpenAI (costs money)",
+        value=st.session_state.use_real_openai,
+        help="When OFF, the backend should return stubbed briefs/images (free). When ON, it uses OpenAI API.",
+    )
+
+    st.caption(f"Mode: {'REAL' if st.session_state.use_real_openai else 'STUB'}")
+
     try:
         r = api_get("/health", timeout=10)
         if r.status_code == 200:
@@ -90,7 +114,7 @@ with col_b:
     st.subheader("Select a project")
 
     try:
-        projects = fetch_projects()
+        projects = fetch_projects(bool(st.session_state.use_real_openai))
     except Exception as e:
         st.error(str(e))
         projects = []
@@ -175,7 +199,7 @@ else:
         if missing:
             st.error(f"Missing required fields: {', '.join(missing)}")
         else:
-            r = requests.post(f"{API_BASE}/cover/brief", json=payload, timeout=180)
+            r = api_post("/cover/brief", payload, timeout=180)
             if r.status_code != 200:
                 st.error(f"API error {r.status_code}: {r.text}")
             else:
@@ -193,7 +217,7 @@ project_id = st.session_state.get("project_id")
 if not project_id:
     st.info("Select a project to view brief history.")
 else:
-    r = requests.get(f"{API_BASE}/projects/{project_id}/brief-runs", timeout=30)
+    r = api_get(f"/projects/{project_id}/brief-runs", timeout=30)
     if r.status_code != 200:
         st.error(f"Failed to load brief runs ({r.status_code}): {r.text}")
     else:
@@ -219,7 +243,6 @@ else:
 
                     st.subheader("Directions")
 
-                    # Per-run controls
                     top_cols = st.columns([1, 1, 2])
                     with top_cols[0]:
                         n_images = st.selectbox(
@@ -266,7 +289,7 @@ else:
                                 "n": n_images,
                                 "size": size,
                             }
-                            resp = requests.post(f"{API_BASE}/cover/image", json=payload, timeout=300)
+                            resp = api_post("/cover/image", payload, timeout=300)
                             if resp.status_code != 200:
                                 st.error(f"API error {resp.status_code}: {resp.text}")
                             else:

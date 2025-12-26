@@ -1,0 +1,14 @@
+{
+  "directions": [
+    {
+      "name": "Midnight Rain",
+      "one_liner": "A dark, cinematic romance set under city lights.",
+      "imagery": "Rain-soaked streets, neon reflections, distant silhouettes.",
+      "typography": "Elegant serif with subtle texture.",
+      "color_palette": "Deep blues, charcoal, soft amber highlights.",
+      "layout_notes": "Centered focal point with negative space for title.",
+      "avoid": "Literal characters, bright colors.",
+      "image_prompt": "Moody rainy city street at night, neon reflections, cinematic lighting, shallow depth of field, no text"
+    }
+  ]
+}
